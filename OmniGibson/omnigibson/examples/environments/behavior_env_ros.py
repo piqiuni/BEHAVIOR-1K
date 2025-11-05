@@ -68,6 +68,7 @@ def main(random_selection=False, headless=False, short_exec=False):
             # action[0:3] = [1.0, 0.0, -5.0]
             # action = np.zeros(23)
             state, reward, terminated, truncated, info = env.step(action * 0.1)
+            
             if terminated or truncated:
                 og.log.info("Episode finished after {} timesteps".format(i + 1))
                 break
