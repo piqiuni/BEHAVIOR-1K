@@ -126,6 +126,9 @@ class SimplePolicy:
         
         # Return zero action (robot will remain stationary)
         action = np.zeros(self.action_dim, dtype=np.float32)
+        action = [-1]*self.action_dim  # For testing purposes, return -1 actions
+        action = np.array(action, dtype=np.float32)
+        
         
         return action
 

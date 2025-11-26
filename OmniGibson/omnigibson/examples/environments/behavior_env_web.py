@@ -53,6 +53,8 @@ from omnigibson.learning.utils.eval_utils import (
 from omnigibson.learning.utils.array_tensor_utils import torch_to_numpy
 import omnigibson.utils.transform_utils as T
 
+from omnigibson.learning.wrappers import RichObservationWrapper
+
 # Make sure object states are enabled
 gm.ENABLE_OBJECT_STATES = True
 gm.USE_GPU_DYNAMICS = False
@@ -152,6 +154,8 @@ def main(random_selection=False, headless=False, short_exec=False, host="localho
     
     # Load the environment
     env = og.Environment(configs=cfg)
+    env = RichObservationWrapper(env=env)
+    # env = instantiate(RichObservationWrapper, env=env)
     
     # Get robot instance
     robot: R1Pro = env.robots[0]
@@ -168,7 +172,6 @@ def main(random_selection=False, headless=False, short_exec=False, host="localho
     logger.info(f"Connecting to WebSocket server at {host}:{port}")
     policy = WebsocketPolicy(host=host, port=port)
     logger.info("WebSocket policy initialized successfully")
-
     # Run a simple loop and reset periodically
     max_iterations = 10 if not short_exec else 1
     
@@ -184,7 +187,10 @@ def main(random_selection=False, headless=False, short_exec=False, host="localho
         
         logger.info(f"Starting episode {j+1}")
         
-        for i in range(100):
+        step = 0
+        short_exec = False
+        max_steps = -1 if not short_exec else 100
+        while step != max_steps:
             # Get action from WebSocket policy
             try:
                 # print("policy.forward")
@@ -201,13 +207,21 @@ def main(random_selection=False, headless=False, short_exec=False, host="localho
             # Preprocess observation for next step
             obs = preprocess_obs(obs_raw, robot, actual_task_name)
             
-            if terminated or truncated:
-                og.log.info(f"Episode finished after {i + 1} timesteps")
-                if info.get("done", {}).get("success", False):
-                    logger.info("✓ Task completed successfully!")
-                else:
-                    logger.info("✗ Task failed or timed out")
-                break
+            # Check for 'o' key press to visualize sensors
+            # Using pygame for non-blocking keyboard input
+            
+            # robot.visualize_sensors()
+            
+            # if terminated or truncated:
+            #     og.log.info(f"Episode finished after {step + 1} timesteps")
+            #     if info.get("done", {}).get("success", False):
+            #         logger.info("✓ Task completed successfully!")
+            #     else:
+            #         logger.info("✗ Task failed or timed out")
+            #     break
+            step += 1
+        
+        input("Press Enter to continue...")
 
     # Always close the environment at the end
     logger.info("Shutting down environment")
