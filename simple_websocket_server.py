@@ -13,6 +13,9 @@ Usage:
     
     # Custom host and port
     python simple_websocket_server.py --host 0.0.0.0 --port 8080
+    
+    # Enable visualization forwarding to ROS visualizer
+    python simple_websocket_server.py --viz-host localhost --viz-port 8001
 
 Then run the environment client:
     python OmniGibson/omnigibson/examples/environments/behavior_env_web.py --host localhost --port 8000
@@ -75,6 +78,73 @@ packb = functools.partial(msgpack.packb, default=pack_array)
 unpackb = functools.partial(msgpack.unpackb, object_hook=unpack_array)
 
 
+class VisualizationForwarder:
+    """
+    Optional forwarder that sends observations and actions to a ROS visualizer server.
+    """
+    
+    def __init__(self, host: str = "localhost", port: int = 8001):
+        """
+        Initialize the visualization forwarder.
+        
+        Args:
+            host: Host of the visualization server
+            port: Port of the visualization server
+        """
+        self.host = host
+        self.port = port
+        self._ws = None
+        self._connected = False
+        self._uri = f"ws://{host}:{port}"
+        
+    async def connect(self) -> bool:
+        """Attempt to connect to the visualization server."""
+        try:
+            self._ws = await websockets.connect(
+                self._uri,
+                max_size=100 * 1024 * 1024,
+            )
+            # Receive metadata
+            metadata = unpackb(await self._ws.recv())
+            logger.info(f"Connected to visualizer at {self._uri}: {metadata}")
+            self._connected = True
+            return True
+        except Exception as e:
+            logger.warning(f"Could not connect to visualizer at {self._uri}: {e}")
+            self._connected = False
+            return False
+    
+    async def forward(self, obs: Dict[str, Any], action: np.ndarray) -> None:
+        """
+        Forward observation and action to the visualizer.
+        
+        Args:
+            obs: Observation dictionary
+            action: Action array
+        """
+        if not self._connected or self._ws is None:
+            return
+        
+        try:
+            data = {"obs": obs, "action": action}
+            await self._ws.send(packb(data))
+            # Receive acknowledgment
+            await self._ws.recv()
+        except Exception as e:
+            logger.debug(f"Failed to forward to visualizer: {e}")
+            self._connected = False
+    
+    async def close(self) -> None:
+        """Close the connection to the visualizer."""
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+            self._connected = False
+
+
 class SimplePolicy:
     """
     A simple policy that returns zero actions.
@@ -133,13 +203,14 @@ class SimplePolicy:
         return action
 
 
-async def handle_client(websocket, policy: SimplePolicy):
+async def handle_client(websocket, policy: SimplePolicy, visualizer: VisualizationForwarder = None):
     """
     Handle WebSocket client connection.
     
     Args:
         websocket: WebSocket connection object
         policy: Policy instance to generate actions
+        visualizer: Optional visualization forwarder
     """
     client_address = websocket.remote_address
     logger.info(f"Client connected from {client_address}")
@@ -166,6 +237,10 @@ async def handle_client(websocket, policy: SimplePolicy):
                 action = policy.predict(obs)
                 logger.debug(f"Generated action: {action.shape}")
                 
+                # Forward to visualizer if available
+                if visualizer is not None:
+                    await visualizer.forward(obs, action)
+                
                 # Prepare response
                 response = {"action": action}
                 
@@ -190,7 +265,8 @@ async def handle_client(websocket, policy: SimplePolicy):
         logger.info(f"Connection closed with {client_address}")
 
 
-async def main(host: str = "0.0.0.0", port: int = 8000, action_dim: int = 23):
+async def main(host: str = "0.0.0.0", port: int = 8000, action_dim: int = 23, 
+               viz_host: str = None, viz_port: int = 8001):
     """
     Start the WebSocket server.
     
@@ -198,9 +274,17 @@ async def main(host: str = "0.0.0.0", port: int = 8000, action_dim: int = 23):
         host (str): Host address to bind to
         port (int): Port to listen on
         action_dim (int): Action space dimension
+        viz_host (str): Optional visualization server host (enables forwarding)
+        viz_port (int): Visualization server port
     """
     # Initialize policy
     policy = SimplePolicy(action_dim=action_dim)
+    
+    # Initialize visualization forwarder if configured
+    visualizer = None
+    if viz_host is not None:
+        visualizer = VisualizationForwarder(host=viz_host, port=viz_port)
+        await visualizer.connect()
     
     logger.info("=" * 60)
     logger.info("Starting Simple WebSocket Server for BEHAVIOR Environment")
@@ -208,6 +292,8 @@ async def main(host: str = "0.0.0.0", port: int = 8000, action_dim: int = 23):
     logger.info(f"Server address: ws://{host}:{port}")
     logger.info(f"Action dimension: {action_dim}")
     logger.info(f"Policy: {policy.__class__.__name__} (returns zero actions)")
+    if visualizer is not None:
+        logger.info(f"Visualization forwarding: ws://{viz_host}:{viz_port}")
     logger.info("=" * 60)
     logger.info("Waiting for client connection...")
     logger.info("")
@@ -252,7 +338,7 @@ async def main(host: str = "0.0.0.0", port: int = 8000, action_dim: int = 23):
 
     # Start WebSocket server
     async with websockets.serve(
-        lambda ws: handle_client(ws, policy),
+        lambda ws: handle_client(ws, policy, visualizer),
         host,
         port,
         process_request=process_request,
@@ -286,6 +372,18 @@ if __name__ == "__main__":
         help="Action space dimension for R1Pro robot (default: 23)"
     )
     parser.add_argument(
+        "--viz-host",
+        type=str,
+        default=None,
+        help="Visualization server host (enables forwarding to ROS visualizer)"
+    )
+    parser.add_argument(
+        "--viz-port",
+        type=int,
+        default=8001,
+        help="Visualization server port (default: 8001)"
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -299,7 +397,13 @@ if __name__ == "__main__":
     
     # Run server
     try:
-        asyncio.run(main(host=args.host, port=args.port, action_dim=args.action_dim))
+        asyncio.run(main(
+            host=args.host, 
+            port=args.port, 
+            action_dim=args.action_dim,
+            viz_host=args.viz_host,
+            viz_port=args.viz_port
+        ))
     except KeyboardInterrupt:
         logger.info("\nServer stopped by user (Ctrl+C)")
     except Exception as e:
