@@ -83,6 +83,7 @@ def preprocess_obs(obs: dict, robot: R1Pro, task_name: str) -> dict:
     cam_rel_poses = []
     
     for camera_name in ROBOT_CAMERA_NAMES["R1Pro"].values():
+        # print(robot.sensors.keys())
         camera = robot.sensors[camera_name.split("::")[1]]
         # Get camera parameters from the camera
         direct_cam_pose = camera.camera_parameters["cameraViewTransform"]
@@ -127,7 +128,7 @@ def main(random_selection=False, headless=False, short_exec=False, host="localho
     It connects to a WebSocket server, sends observations, receives actions,
     and steps the environment accordingly, resetting it 10 times.
     """
-    og.log.info(f"Demo {__file__}\n    " + "*" * 80 + "\n    Description:\n" + main.__doc__ + "*" * 80)
+    og.log.info(f"Demo {__file__}\n    " + "*" * 80 + "\n    Description:\n" + (main.__doc__ or "") + "*" * 80)
 
     # Use pre-sampled cached BEHAVIOR activity scene
     should_sample = False
@@ -186,6 +187,7 @@ def main(random_selection=False, headless=False, short_exec=False, host="localho
         for i in range(100):
             # Get action from WebSocket policy
             try:
+                # print("policy.forward")
                 action = policy.forward(obs=obs)
                 action_np = action.numpy() if isinstance(action, th.Tensor) else action
             except Exception as e:

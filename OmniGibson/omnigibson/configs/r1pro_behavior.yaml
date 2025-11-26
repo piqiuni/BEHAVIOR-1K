@@ -39,7 +39,7 @@ scene:
 
 robots: 
   - type: R1Pro
-    name: r1prorobot_r1robot_r1
+    name: robot_r1
     obs_modalities: [rgb, depth]
     include_sensor_names: null
     exclude_sensor_names: null

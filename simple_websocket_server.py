@@ -24,6 +24,7 @@ import msgpack
 import numpy as np
 import argparse
 import logging
+import functools
 from typing import Dict, Any
 
 # Setup logging
@@ -32,6 +33,46 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("websocket_server")
+
+
+# NumPy array support for msgpack (same as network_utils.py)
+def pack_array(obj):
+    """Pack NumPy arrays for msgpack serialization."""
+    if (isinstance(obj, (np.ndarray, np.generic))) and obj.dtype.kind in ("V", "O", "c"):
+        raise ValueError(f"Unsupported dtype: {obj.dtype}")
+
+    if isinstance(obj, np.ndarray):
+        return {
+            b"__ndarray__": True,
+            b"data": obj.tobytes(),
+            b"dtype": obj.dtype.str,
+            b"shape": obj.shape,
+        }
+
+    if isinstance(obj, np.generic):
+        return {
+            b"__npgeneric__": True,
+            b"data": obj.item(),
+            b"dtype": obj.dtype.str,
+        }
+
+    return obj
+
+
+def unpack_array(obj):
+    """Unpack NumPy arrays from msgpack."""
+    if b"__ndarray__" in obj:
+        return np.ndarray(buffer=obj[b"data"], dtype=np.dtype(obj[b"dtype"]), shape=obj[b"shape"])
+
+    if b"__npgeneric__" in obj:
+        return np.dtype(obj[b"dtype"]).type(obj[b"data"])
+
+    return obj
+
+
+# Create packer/unpacker with NumPy support
+packb = functools.partial(msgpack.packb, default=pack_array)
+unpackb = functools.partial(msgpack.unpackb, object_hook=unpack_array)
 
 
 class SimplePolicy:
@@ -71,7 +112,7 @@ class SimplePolicy:
             np.ndarray: Action array of shape (action_dim,)
         """
         self.step_count += 1
-        print(obs)
+        
         # Log observation info every 10 steps
         if self.step_count % 10 == 1:
             logger.info(f"Step {self.step_count}: Received observation with keys: {list(obs.keys())}")
@@ -80,6 +121,8 @@ class SimplePolicy:
             for key, value in obs.items():
                 if isinstance(value, np.ndarray):
                     logger.debug(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+        elif self.step_count == 1:
+            logger.info(f"First observation received with keys: {list(obs.keys())}")
         
         # Return zero action (robot will remain stationary)
         action = np.zeros(self.action_dim, dtype=np.float32)
@@ -87,24 +130,29 @@ class SimplePolicy:
         return action
 
 
-async def handle_client(websocket, path, policy: SimplePolicy):
+async def handle_client(websocket, policy: SimplePolicy):
     """
     Handle WebSocket client connection.
     
     Args:
         websocket: WebSocket connection object
-        path: Connection path
         policy: Policy instance to generate actions
     """
     client_address = websocket.remote_address
     logger.info(f"Client connected from {client_address}")
     
     try:
+        # Send server metadata as first message (expected by WebsocketClientPolicy)
+        metadata = {"action_dim": policy.action_dim, "server": "simple_websocket_server"}
+        metadata_bytes = packb(metadata)
+        await websocket.send(metadata_bytes)
+        logger.info("Sent server metadata to client")
+        
         async for message in websocket:
             try:
-                # Deserialize observation using msgpack
-                obs = msgpack.unpackb(message, raw=False)
-                
+                # Deserialize observation using msgpack with NumPy support
+                obs = unpackb(message)
+                print("get msg")
                 # Check if this is a reset signal
                 if isinstance(obs, dict) and obs.get("reset", False):
                     logger.info("Received reset signal")
@@ -113,12 +161,13 @@ async def handle_client(websocket, path, policy: SimplePolicy):
                 
                 # Get action from policy
                 action = policy.predict(obs)
+                logger.debug(f"Generated action: {action.shape}")
                 
                 # Prepare response
                 response = {"action": action}
                 
-                # Serialize and send response
-                response_bytes = msgpack.packb(response, use_bin_type=True)
+                # Serialize and send response with NumPy support
+                response_bytes = packb(response)
                 await websocket.send(response_bytes)
                 
             except msgpack.exceptions.ExtraData as e:
@@ -160,11 +209,50 @@ async def main(host: str = "0.0.0.0", port: int = 8000, action_dim: int = 23):
     logger.info("Waiting for client connection...")
     logger.info("")
     
+    # Helper to handle HTTP requests (like health checks)
+    def process_request(connection, request):
+        """
+        Handle HTTP requests before WebSocket upgrade.
+        - /healthz: Return 200 OK for health checks
+        - Other non-WebSocket requests: Return 426 Upgrade Required
+        - WebSocket upgrade requests: Allow to proceed (return None)
+        """
+        from websockets.http11 import Response
+        from websockets.datastructures import Headers
+        
+        # Check if this is a health check endpoint
+        if request.path == "/healthz":
+            logger.info("Health check request received")
+            return Response(
+                status_code=200,
+                reason_phrase="OK",
+                headers=Headers([("Content-Type", "text/plain")]),
+                body=b"OK\n"
+            )
+        
+        # Check if this is a WebSocket upgrade request
+        conn_hdr = request.headers.get("Connection", "")
+        upgrade_hdr = request.headers.get("Upgrade", "")
+        
+        if "upgrade" in conn_hdr.lower() and "websocket" in upgrade_hdr.lower():
+            # This is a valid WebSocket upgrade request, allow it to proceed
+            return None
+        
+        # Non-WebSocket HTTP request - return 426
+        logger.warning(f"Non-WebSocket request to {request.path}")
+        return Response(
+            status_code=426,
+            reason_phrase="Upgrade Required",
+            headers=Headers([("Content-Type", "text/plain")]),
+            body=b"426 Upgrade Required: This endpoint expects a WebSocket connection.\n"
+        )
+
     # Start WebSocket server
     async with websockets.serve(
-        lambda ws, path: handle_client(ws, path, policy),
+        lambda ws: handle_client(ws, policy),
         host,
         port,
+        process_request=process_request,
         max_size=100 * 1024 * 1024,  # 100 MB max message size (for large images)
         ping_interval=20,             # Send ping every 20 seconds
         ping_timeout=10,              # Wait 10 seconds for pong

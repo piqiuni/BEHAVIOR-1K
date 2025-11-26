@@ -57,7 +57,14 @@ class WebsocketPolicy:
     def forward(self, obs: dict, *args, **kwargs) -> th.Tensor:
         # convert observation to numpy
         obs = torch_to_numpy(obs)
-        return self.policy.act(obs).detach().cpu()
+        # return self.policy.act(obs).detach().cpu()
+        
+        action = self.policy.act(obs)
+        if isinstance(action, th.Tensor):
+            return action.detach().cpu()
+        else:
+            # action is already a numpy array, convert to tensor
+            return th.from_numpy(action).float()
 
     def reset(self) -> None:
         self.policy.reset()

@@ -43,12 +43,34 @@ def any_concat(xs: List, *, dim: int = 0):
     return tree.map_structure(_any_concat_helper, *xs)
 
 
+# @make_recursive_func
+# def torch_to_numpy(tensor_struct):
+#     """
+#     Converts all tensors in a nested structure to numpy arrays.
+#     """
+#     return tree.map_structure(lambda x: x.detach().cpu().numpy(), tensor_struct)
+
 @make_recursive_func
 def torch_to_numpy(tensor_struct):
     """
-    Converts all tensors in a nested structure to numpy arrays.
+    增强版：将嵌套结构中的 PyTorch 张量转 numpy 数组，已为 numpy 的元素直接保留，其他类型尝试转换
     """
-    return tree.map_structure(lambda x: x.detach().cpu().numpy(), tensor_struct)
+    def convert_element(x):
+        # 1. 如果是 PyTorch 张量：detach→CPU→转 numpy
+        if isinstance(x, th.Tensor):
+            return x.detach().cpu().numpy()
+        # 2. 如果已经是 numpy 数组：直接返回（可选：统一 dtype 避免后续报错）
+        elif isinstance(x, np.ndarray):
+            return x.astype(np.float32)  # 统一为 float32，根据需求可修改
+        # 3. 如果是 list/tuple：转 numpy 数组（比如输入是 [1,2,3]）
+        elif isinstance(x, (list, tuple)):
+            return np.array(x, dtype=np.float32)
+        # 4. 其他类型（int/float/str）：原样返回（或根据需求处理）
+        else:
+            return x
+    
+    # 遍历嵌套结构，对每个元素执行 convert_element
+    return tree.map_structure(convert_element, tensor_struct)
 
 
 @make_recursive_func
