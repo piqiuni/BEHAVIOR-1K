@@ -19,11 +19,11 @@ Usage:
     # Start with default settings (localhost:8001 for visualization port)
     python ros_visualizer.py
     
-    # Custom WebSocket server to receive data from
-    python ros_visualizer.py --ws-host 192.168.1.100 --ws-port 8001
+    # Custom host and port
+    python ros_visualizer.py --host 192.168.1.100 --port 8001
     
-    # Custom settings
-    python ros_visualizer.py --ws-host localhost --ws-port 8001 --rate 30
+    # With verbose logging
+    python ros_visualizer.py --host localhost --port 8001 --verbose
 
 ROS Topics Published:
     Observations (camera images):
@@ -56,6 +56,7 @@ import msgpack
 import numpy as np
 import threading
 import time
+import websockets
 from typing import Dict, Any, Optional
 
 # Setup logging
@@ -436,12 +437,6 @@ class VisualizationWebSocketServer:
     
     async def run(self):
         """Start the WebSocket server."""
-        try:
-            import websockets
-        except ImportError:
-            logger.error("websockets library not installed")
-            return
-        
         logger.info("=" * 60)
         logger.info("ROS Visualization WebSocket Server")
         logger.info("=" * 60)
