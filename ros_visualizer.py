@@ -58,6 +58,13 @@ import threading
 import time
 from typing import Dict, Any, Optional
 
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    websockets = None
+    WEBSOCKETS_AVAILABLE = False
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -243,16 +250,28 @@ class ROSVisualizerPublisher:
         
         try:
             # Camera link name patterns to search for in obs
-            camera_patterns = {
-                "left_realsense": ["left_realsense_link:Camera:0", "left_realsense"],
-                "right_realsense": ["right_realsense_link:Camera:0", "right_realsense"],
-                "zed": ["zed_link:Camera:0", "zed"],
+            # Maps camera key -> (patterns to search, publisher key prefix)
+            camera_config = {
+                "left_realsense": {
+                    "patterns": ["left_realsense_link:Camera:0", "left_realsense"],
+                    "pub_prefix": "left",
+                },
+                "right_realsense": {
+                    "patterns": ["right_realsense_link:Camera:0", "right_realsense"],
+                    "pub_prefix": "right",
+                },
+                "zed": {
+                    "patterns": ["zed_link:Camera:0", "zed"],
+                    "pub_prefix": "zed",
+                },
             }
             
             # Try to find and publish camera images
-            for cam_key, patterns in camera_patterns.items():
+            for cam_key, config in camera_config.items():
                 rgb_img = None
                 depth_img = None
+                patterns = config["patterns"]
+                pub_prefix = config["pub_prefix"]
                 
                 # Search for matching keys in obs
                 for pattern in patterns:
@@ -268,7 +287,7 @@ class ROSVisualizerPublisher:
                     try:
                         img = to_cv_img(rgb_img, is_depth=False)
                         msg = self.bridge.cv2_to_imgmsg(img, encoding="rgb8")
-                        self.pubs[f"{cam_key.split('_')[0]}_rgb"].publish(msg)
+                        self.pubs[f"{pub_prefix}_rgb"].publish(msg)
                     except Exception as e:
                         logger.debug(f"Failed to publish {cam_key} RGB: {e}")
                 
@@ -276,7 +295,7 @@ class ROSVisualizerPublisher:
                     try:
                         img = to_cv_img(depth_img, is_depth=True)
                         msg = self.bridge.cv2_to_imgmsg(img, encoding="32FC1")
-                        self.pubs[f"{cam_key.split('_')[0]}_depth"].publish(msg)
+                        self.pubs[f"{pub_prefix}_depth"].publish(msg)
                     except Exception as e:
                         logger.debug(f"Failed to publish {cam_key} depth: {e}")
             
@@ -436,9 +455,7 @@ class VisualizationWebSocketServer:
     
     async def run(self):
         """Start the WebSocket server."""
-        try:
-            import websockets
-        except ImportError:
+        if not WEBSOCKETS_AVAILABLE:
             logger.error("websockets library not installed")
             return
         
