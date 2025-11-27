@@ -4,6 +4,48 @@
 
 `behavior_env_web.py` is a modified version of `behavior_env_demo.py` that enables remote control of the BEHAVIOR robot environment through WebSocket communication.
 
+## Architecture
+
+The system supports three main components that can run independently:
+
+```
+┌─────────────────┐     WebSocket     ┌─────────────────────┐
+│  BEHAVIOR Env   │◄─────────────────►│  WebSocket Server   │
+│ (behavior_env_  │     obs/action    │ (simple_websocket_  │
+│  web.py)        │                   │  server.py)         │
+└─────────────────┘                   └──────────┬──────────┘
+                                                 │ (optional)
+                                                 │ Forward
+                                                 ▼
+                                      ┌─────────────────────┐
+                                      │  ROS Visualizer     │
+                                      │ (ros_visualizer.py) │
+                                      └──────────┬──────────┘
+                                                 │
+                                                 ▼
+                                      ┌─────────────────────┐
+                                      │  ROS Topics         │
+                                      │  /behavior/...      │
+                                      └─────────────────────┘
+```
+
+## Components
+
+### 1. Environment Client (`behavior_env_web.py`)
+- Runs the OmniGibson simulation
+- Sends observations to WebSocket server
+- Receives and executes actions
+
+### 2. WebSocket Server (`simple_websocket_server.py`)
+- Receives observations from environment
+- Runs policy to generate actions
+- Optionally forwards data to ROS visualizer
+
+### 3. ROS Visualizer (`ros_visualizer.py`)
+- Receives observations and actions via WebSocket
+- Publishes to ROS topics for visualization
+- Runs independently as a monitoring component
+
 ## Key Features
 
 ### 1. **Observation Preprocessing** (参考 `eval.py`)
@@ -186,3 +228,96 @@ The implementation follows the architecture from `eval.py`:
 - Test with simple actions first
 - Monitor network latency
 - Consider implementing action smoothing for better control
+
+---
+
+## ROS Visualization Component
+
+### Overview
+
+The `ros_visualizer.py` script provides a visualization endpoint that receives observations and actions from the WebSocket server and publishes them through ROS topics.
+
+### ROS Topics Published
+
+| Topic | Message Type | Description |
+|-------|--------------|-------------|
+| `/behavior/left_realsense/rgb` | `sensor_msgs/Image` | Left realsense RGB camera |
+| `/behavior/left_realsense/depth` | `sensor_msgs/Image` | Left realsense depth camera |
+| `/behavior/right_realsense/rgb` | `sensor_msgs/Image` | Right realsense RGB camera |
+| `/behavior/right_realsense/depth` | `sensor_msgs/Image` | Right realsense depth camera |
+| `/behavior/zed/rgb` | `sensor_msgs/Image` | ZED RGB camera |
+| `/behavior/zed/depth` | `sensor_msgs/Image` | ZED depth camera |
+| `/behavior/action` | `std_msgs/Float32MultiArray` | Robot action (23-DoF) |
+| `/behavior/proprioception` | `std_msgs/Float32MultiArray` | Robot proprioception |
+
+### Usage
+
+#### Step 1: Start the ROS Visualizer
+```bash
+# Start visualizer server on port 8001
+python ros_visualizer.py --port 8001
+```
+
+#### Step 2: Start the WebSocket Server with Visualization Forwarding
+```bash
+# Start policy server with visualization forwarding enabled
+python simple_websocket_server.py --port 8000 --viz-host localhost --viz-port 8001
+```
+
+#### Step 3: Start the Environment
+```bash
+# Start the BEHAVIOR environment
+python OmniGibson/omnigibson/examples/environments/behavior_env_web.py --host localhost --port 8000
+```
+
+### Command Line Arguments (ros_visualizer.py)
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--host` | str | `0.0.0.0` | Host address to bind to |
+| `--port` | int | `8001` | Port to listen on |
+| `--action-dim` | int | `23` | Action space dimension |
+| `--verbose` | flag | `False` | Enable verbose logging |
+
+### Integration with RViz
+
+Once the visualizer is running, you can view the camera feeds in RViz:
+
+1. Launch RViz: `rosrun rviz rviz`
+2. Add Image displays for:
+   - `/behavior/left_realsense/rgb`
+   - `/behavior/right_realsense/rgb`
+   - `/behavior/zed/rgb`
+3. Monitor actions on the terminal or use `rostopic echo /behavior/action`
+
+### Mock Mode
+
+If ROS is not available, the visualizer will run in mock mode and print warnings. This allows testing the WebSocket communication without a full ROS installation.
+
+### Dependencies
+
+- Python 3.7+
+- `websockets`
+- `msgpack`
+- `numpy`
+- ROS (rospy, sensor_msgs, std_msgs, cv_bridge) - optional
+
+### Example: Custom Visualization Processing
+
+You can extend the `ROSVisualizerPublisher` class for custom visualization:
+
+```python
+from ros_visualizer import ROSVisualizerPublisher, VisualizationBridge
+
+# Create a bridge
+bridge = VisualizationBridge()
+
+# Update with observation and action
+bridge.update(obs=observation_dict, action=action_array)
+
+# Or wrap an existing policy
+from ros_visualizer import create_visualization_middleware
+
+wrapped_policy = create_visualization_middleware(original_policy, bridge)
+action = wrapped_policy.forward(obs)  # Automatically sends to visualizer
+```

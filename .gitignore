@@ -3,6 +3,12 @@ gha-creds-*.json
 .vscode
 .DS_Store
 
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
 # training
 outputs/
 /*.ipynb
